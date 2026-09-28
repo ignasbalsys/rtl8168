@@ -56,6 +56,10 @@ DRIVER_DISPATCH Rtl8168DeviceControl;
 
 DRIVER_UNLOAD Rtl8168UnloadDriver;
 
+NTSTATUS Rtl8168MapDeviceRegisters(
+    PVOID* Va
+);
+
 VOID
 PrintIrpInfo(
     PIRP Irp
@@ -71,6 +75,7 @@ PrintChars(
 #pragma alloc_text( PAGE, Rtl8168CreateClose)
 #pragma alloc_text( PAGE, Rtl8168DeviceControl)
 #pragma alloc_text( PAGE, Rtl8168UnloadDriver)
+#pragma alloc_text( PAGE, Rtl8168MapDeviceRegisters)
 #pragma alloc_text( PAGE, PrintIrpInfo)
 #pragma alloc_text( PAGE, PrintChars)
 #endif // ALLOC_PRAGMA
@@ -158,6 +163,9 @@ Return Value:
     }
 
     RTL_KDPRINT(("Hello from kernel mode"));
+
+
+
 
     return Status;
 }
@@ -340,55 +348,8 @@ Return Value:
             break;
         }
 
-        ULONG Rtl8168BAR[6] = { 0 };
-
-        ULONG BytesRead = HalGetBusDataByOffset(
-            PCIConfiguration,
-            1,
-            0,
-            (PVOID)Rtl8168BAR,
-            0x10,
-            6 * 4
-        );
-
-        if (BytesRead != 6 * 4)
-        {
-            Status = STATUS_UNSUCCESSFUL;
-            goto End;
-        }
-
-        for (int i = 0; i < 6; i++)
-        {
-            DbgPrint("BAR%u: %x\n", i, Rtl8168BAR[i]);
-        }
-
-        /* Check if RTL8168 BAR2 is MMIO */
-        if (Rtl8168BAR[2] & 1)
-        {
-            /* I/O BAR */
-            Status = STATUS_UNSUCCESSFUL;
-            goto End;
-        }
-
-        PHYSICAL_ADDRESS Pa = { 0 };
-        if ((Rtl8168BAR[2] & 0x6) == 0x4)
-        {
-            /* 64 bit BAR */
-            Pa.QuadPart = ((ULONGLONG)Rtl8168BAR[3] << 32) | (Rtl8168BAR[2] & 0xFFFFFFF0);
-        } 
-        else
-        {
-            /* 32 bit BAR */
-            Pa.QuadPart = Rtl8168BAR[2] & 0xFFFFFFF0;
-        }
-
-        PVOID RegVa = MmMapIoSpaceEx(Pa, 0xFF, PAGE_READWRITE | PAGE_NOCACHE);
-        if ( !RegVa )
-        {
-            Status = STATUS_INSUFFICIENT_RESOURCES;
-            goto End;
-        }
-
+        PVOID RegVa = NULL;
+        Rtl8168MapDeviceRegisters(&RegVa);
 
         //
         // Write data to be sent to the user in this buffer
@@ -482,5 +443,67 @@ PrintChars(
         KdPrint(("\n"));
     }
     return;
+}
+
+NTSTATUS Rtl8168MapDeviceRegisters(
+    PVOID* Va
+)
+{
+    NTSTATUS Status = STATUS_SUCCESS;
+    ULONG Rtl8168BAR[6] = { 0 };
+
+    if (!Va)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+
+    ULONG BytesRead = HalGetBusDataByOffset(
+        PCIConfiguration,
+        1,
+        0,
+        (PVOID)Rtl8168BAR,
+        0x10,
+        6 * 4
+    );
+
+    if (BytesRead != 6 * 4)
+    {
+        return STATUS_UNSUCCESSFUL;
+    }
+
+#if DBG
+    for (int i = 0; i < 6; i++)
+    {
+        DbgPrint("BAR%u: %x\n", i, Rtl8168BAR[i]);
+    }
+#endif 
+
+    /* Check if RTL8168 BAR2 is MMIO */
+    if (Rtl8168BAR[2] & 1)
+    {
+        /* I/O BAR */
+        return STATUS_UNSUCCESSFUL;
+    }
+
+    PHYSICAL_ADDRESS Pa = { 0 };
+    if ((Rtl8168BAR[2] & 0x6) == 0x4)
+    {
+        /* 64 bit BAR */
+        Pa.QuadPart = ((ULONGLONG)Rtl8168BAR[3] << 32) | (Rtl8168BAR[2] & 0xFFFFFFF0);
+    }
+    else
+    {
+        /* 32 bit BAR */
+        Pa.QuadPart = Rtl8168BAR[2] & 0xFFFFFFF0;
+    }
+
+    *Va = MmMapIoSpaceEx(Pa, 0xFF, PAGE_READWRITE | PAGE_NOCACHE);
+    if (!*Va)
+    {
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    return Status;
 }
 
